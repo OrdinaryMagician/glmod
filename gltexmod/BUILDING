@@ -1,0 +1,4 @@
+32-bit library: gcc -m32 -shared -ldl -o gltexmod32.so gltexmod.c
+64-bit library: gcc -m64 -shared -ldl -fPIC -o gltexmod64.so gltexmod.c
+
+As simple as that, really.

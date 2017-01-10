@@ -12,8 +12,19 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <stdarg.h>
 
-#define GL_UNSIGNED_BYTE 0x1401
+#ifndef CFG_PATH
+# define CFG_PATH "/etc/glmod/dump.conf"
+#endif
+#ifndef DUMP_PATH
+# define DUMP_PATH "/usr/share/glmod/dump"
+#endif
+
+static char dumppath[256] = DUMP_PATH;
+static int dumpallmiplevels = 1;
+static int dumpcomptex = 1;
+static int verbose = 0;
 
 #define GL_RED  0x1903
 #define GL_RG   0x8227
@@ -22,7 +33,6 @@
 #define GL_RGBA 0x1908
 #define GL_BGRA 0x8021
 
-#define GL_COMPRESSED_RGB_S3TC_DXT1_EXT 0x83F0
 #define GL_COMPRESSED_RGBA_S3TC_DXT1_EXT 0x83F1
 #define GL_COMPRESSED_RGBA_S3TC_DXT3_EXT 0x83F2
 #define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT 0x83F3
@@ -47,6 +57,7 @@ ddsheader_t ddshead =
 	.caps = {0x1000,0,0,0}, .reserved2 = 0
 };
 
+static char pname[256] = {0};
 static void *handle = 0;
 static void(*glteximage2d)(unsigned,int,int,int,int,int,unsigned,unsigned,
 	const void*) = 0;
@@ -59,6 +70,21 @@ static void(*glcompressedteximage2d)(unsigned,int,unsigned,int,int,int,int,
 static void(*glcompressedtexsubimage2d)(unsigned,int,int,int,int,int,unsigned,
 	int,const void*) = 0;
 
+/* generic error print function */
+#define B_ERR   0
+#define B_WARN  1
+#define B_INFO  2
+#define B_DEBUG 3
+int bail( int level, const char *fmt, ... )
+{
+	if ( level > verbose ) return 1;
+	va_list args;
+	va_start(args,fmt);
+	vfprintf(stderr,fmt,args);
+	va_end(args);
+	return 1;
+}
+
 int getpixelsize( unsigned format )
 {
 	if ( format == GL_RED ) return 1;
@@ -67,8 +93,7 @@ int getpixelsize( unsigned format )
 	if ( format == GL_BGR ) return 3;
 	if ( format == GL_RGBA ) return 4;
 	if ( format == GL_BGRA ) return 4;
-	fprintf(stderr,"[gltxdump] unsupported format %x\n",format);
-	return 0;
+	return bail(B_WARN,"[gltxdump] unsupported format %x\n",format)&0;
 }
 
 dword crc_tab[256];
@@ -101,10 +126,18 @@ dword crc( const byte *buf, int len )
 void dumptexture( unsigned format, int mip, int width, int height,
 	const void* pixels )
 {
-	if ( !pixels ) return;
+	if ( (mip > 0) && !dumpallmiplevels )
+	{
+		bail(B_INFO,"[gltxdump] skipping mipmap\n");
+		return;
+	}
 	int pitch = width*getpixelsize(format);
 	int txsiz = pitch*height;
-	if ( !txsiz ) return;
+	if ( !pixels || !txsiz )
+	{
+		bail(B_INFO,"[gltxdump] skipping empty texture\n");
+		return;
+	}
 	/* change the dds header accordingly */
 	ddshead.width = width;
 	ddshead.height = height;
@@ -160,28 +193,29 @@ void dumptexture( unsigned format, int mip, int width, int height,
 	}
 	else
 	{
-		fprintf(stderr,"[gltxdump] unsupported format %X\n",format);
+		bail(B_WARN,"[gltxdump] unsupported format %X\n",format);
 		return;
 	}
 	dword texcrc = crc(pixels,txsiz);
 	char fname[256];
-	mkdir("/tmp/gltxdump",0755);
-	snprintf(fname,256,"/tmp/gltxdump/%u_%08X.dds",mip,texcrc);
+	snprintf(fname,256,"%s/%s",dumppath,pname);
+	mkdir(fname,0775);
+	snprintf(fname,256,"%s/%s/%u_%08X.dds",dumppath,pname,mip,texcrc);
 	struct stat st;
 	if ( !stat(fname,&st) )
 	{
-		fprintf(stderr,"[gltxdump] %08X already dumped, skipping\n",
+		bail(B_INFO,"[gltxdump] %08X already dumped, skipping\n",
 			texcrc);
 		return;
 	}
 	FILE *tx = fopen(fname,"w");
 	if ( !tx )
 	{
-		fprintf(stderr,"[gltxdump] could not open file for %08X: %s\n",
+		bail(B_ERR,"[gltxdump] could not open file for %08X: %s\n",
 			texcrc,strerror(errno));
 		return;
 	}
-	fprintf(stderr,"[gltxdump] dumping texture with hash %08X\n",texcrc);
+	bail(B_INFO,"[gltxdump] dumping texture with hash %08X\n",texcrc);
 	fwrite(&ddshead,1,sizeof(ddsheader_t),tx);
 	fwrite(pixels,1,txsiz,tx);
 	fclose(tx);
@@ -190,16 +224,28 @@ void dumptexture( unsigned format, int mip, int width, int height,
 void dumpcompressed( unsigned format, int mip, int width, int height,
 	int datasize, const void* data )
 {
-	if ( !data ) return;
-	if ( !datasize ) return;
+	if ( !dumpcomptex )
+	{
+		bail(B_INFO,"[gltxdump] skipping compressed texture\n");
+		return;
+	}
+	if ( !data || !datasize )
+	{
+		bail(B_DEBUG,"[gltxdump] skipping empty compressed texture\n");
+		return;
+	}
 	/* change the dds header accordingly */
 	ddshead.width = width;
 	ddshead.height = height;
+	ddshead.pitch = 0;
 	ddshead.flags = 0x00001007;
 	ddshead.pf_flags = 0x4;
-	if ( format == GL_COMPRESSED_RGB_S3TC_DXT1_EXT )
-		ddshead.pf_fourcc = 0x31545844;
-	else if ( format == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT )
+	ddshead.pf_bitcount = 0;
+	ddshead.pf_rmask = 0;
+	ddshead.pf_gmask = 0;
+	ddshead.pf_bmask = 0;
+	ddshead.pf_amask = 0;
+	if ( format == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT )
 		ddshead.pf_fourcc = 0x31545844;
 	else if ( format == GL_COMPRESSED_RGBA_S3TC_DXT3_EXT )
 		ddshead.pf_fourcc = 0x33545844;
@@ -207,29 +253,30 @@ void dumpcompressed( unsigned format, int mip, int width, int height,
 		ddshead.pf_fourcc = 0x35545844;
 	else
 	{
-		fprintf(stderr,"[gltxdump] unsupported compressed format %X\n",
+		bail(B_WARN,"[gltxdump] unsupported compressed format %X\n",
 			format);
 		return;
 	}
 	dword texcrc = crc(data,datasize);
 	char fname[256];
-	mkdir("/tmp/gltxdump",0755);
-	snprintf(fname,256,"/tmp/gltxdump/%u_%08X.dds",mip,texcrc);
+	snprintf(fname,256,"%s/%s",dumppath,pname);
+	mkdir(fname,0775);
+	snprintf(fname,256,"%s/%s/%u_%08X.dds",dumppath,pname,mip,texcrc);
 	struct stat st;
 	if ( !stat(fname,&st) )
 	{
-		fprintf(stderr,"[gltxdump] %08X already dumped, skipping\n",
+		bail(B_INFO,"[gltxdump] %08X already dumped, skipping\n",
 			texcrc);
 		return;
 	}
 	FILE *tx = fopen(fname,"w");
 	if ( !tx )
 	{
-		fprintf(stderr,"[gltxdump] could not open file for %08X: %s\n",
+		bail(B_ERR,"[gltxdump] could not open file for %08X: %s\n",
 			texcrc,strerror(errno));
 		return;
 	}
-	fprintf(stderr,"[gltxdump] dumping compressed texture with hash %08X\n"
+	bail(B_INFO,"[gltxdump] dumping compressed texture with hash %08X\n"
 		,texcrc);
 	fwrite(&ddshead,1,sizeof(ddsheader_t),tx);
 	fwrite(data,1,datasize,tx);
@@ -240,9 +287,9 @@ void glTexImage2D( unsigned target, int level, int internalFormat,
 	int width, int height, int border, unsigned format, unsigned type,
 	const void *pixels )
 {
-//	fprintf(stderr,"[gltxdump] glTexImage2D(%u,%d,%x,%d,%d,%d,%x,%x,%p)\n",
-//		target,level,internalFormat,width,height,border,format,type,
-//		pixels);
+	bail(B_DEBUG,"[gltxdump] glTexImage2D(%u,%d,%x,%d,%d,%d,%x,%x,%p)\n",
+		target,level,internalFormat,width,height,border,format,type,
+		pixels);
 	dumptexture(format,level,width,height,pixels);
 	glteximage2d(target,level,internalFormat,width,height,border,format,
 		type,pixels);
@@ -252,9 +299,9 @@ void glTexSubImage2D( unsigned target, int level, int xoffset, int yoffset,
 	int width, int height, unsigned format, unsigned type,
 	const void *pixels )
 {
-//	fprintf(stderr,"[gltxdump] glTexSubImage2D(%u,%d,%d,%d,%d,%d,%x,%x,"
-//		"%p)\n",target,level,xoffset,yoffset,width,height,format,type,
-//		pixels);
+	bail(B_DEBUG,"[gltxdump] glTexSubImage2D(%u,%d,%d,%d,%d,%d,%x,%x,"
+		"%p)\n",target,level,xoffset,yoffset,width,height,format,type,
+		pixels);
 	dumptexture(format,level,width,height,pixels);
 	gltexsubimage2d(target,level,xoffset,yoffset,width,height,format,
 		type,pixels);
@@ -264,9 +311,9 @@ void glCompressedTexImage2D( unsigned target, int level,
 	unsigned internalformat, int width, int height, int border,
 	int imageSize, const void *data)
 {
-//	fprintf(stderr,"[gltxdump] glCompressedTexImage2D(%u,%d,%u,%d,%d,%d,%d"
-//		",%p)\n",target,level,internalformat,width,height,border,
-//		imageSize,data);
+	bail(B_DEBUG,"[gltxdump] glCompressedTexImage2D(%u,%d,%u,%d,%d,%d,%d"
+		",%p)\n",target,level,internalformat,width,height,border,
+		imageSize,data);
 	dumpcompressed(internalformat,level,width,height,imageSize,data);
 	glcompressedteximage2d(target,level,internalformat,width,height,border,
 		imageSize,data);
@@ -276,9 +323,9 @@ void glCompressedTexSubImage2D( unsigned target, int level,
 	int xoffset, int yoffset, int width, int height, unsigned format,
 	int imageSize, const void *data)
 {
-//	fprintf(stderr,"[gltxdump] glCompressedTexSubImage2D(%u,%d,%d,%d,%d,%d"
-//		",%u,%d,%p)\n",target,level,xoffset,yoffset,width,height,
-//		format,imageSize,data);
+	bail(B_DEBUG,"[gltxdump] glCompressedTexSubImage2D(%u,%d,%d,%d,%d,%d"
+		",%u,%d,%p)\n",target,level,xoffset,yoffset,width,height,
+		format,imageSize,data);
 	dumpcompressed(format,level,width,height,imageSize,data);
 	glcompressedtexsubimage2d(target,level,xoffset,yoffset,width,height,
 		format,imageSize,data);
@@ -286,8 +333,8 @@ void glCompressedTexSubImage2D( unsigned target, int level,
 
 void* SDL_GL_GetProcAddress( const char* proc )
 {
-//	fprintf(stderr,"[gltxdump] program asks for \"%s\" through"
-//		" SDL_GL_GetProcAddress\n",proc);
+	bail(B_DEBUG,"[gltxdump] program asks for \"%s\" through"
+		" SDL_GL_GetProcAddress\n",proc);
 	if ( !strcmp(proc,"glTexImage2D") ) return glTexImage2D;
 	if ( !strcmp(proc,"glTexSubImage2D") ) return glTexSubImage2D;
 	if ( !strcmp(proc,"glCompressedTexImage2D") )
@@ -300,8 +347,8 @@ void* SDL_GL_GetProcAddress( const char* proc )
 
 void* glXGetProcAddress( const char* proc )
 {
-//	fprintf(stderr,"[gltxdump] program asks for \"%s\" through"
-//		" glXGetProcAddress\n",proc);
+	bail(B_DEBUG,"[gltxdump] program asks for \"%s\" through"
+		" glXGetProcAddress\n",proc);
 	if ( !strcmp(proc,"glTexImage2D") ) return glTexImage2D;
 	if ( !strcmp(proc,"glTexSubImage2D") ) return glTexSubImage2D;
 	if ( !strcmp(proc,"glCompressedTexImage2D") )
@@ -314,8 +361,8 @@ void* glXGetProcAddress( const char* proc )
 
 void* glXGetProcAddressARB( const char* proc )
 {
-//	fprintf(stderr,"[gltxdump] program asks for \"%s\" through"
-//		" glXGetProcAddressARB\n",proc);
+	bail(B_DEBUG,"[gltxdump] program asks for \"%s\" through"
+		" glXGetProcAddressARB\n",proc);
 	if ( !strcmp(proc,"glTexImage2D") ) return glTexImage2D;
 	if ( !strcmp(proc,"glTexSubImage2D") ) return glTexSubImage2D;
 	if ( !strcmp(proc,"glCompressedTexImage2D") )
@@ -328,10 +375,11 @@ void* glXGetProcAddressARB( const char* proc )
 
 extern void *_dl_sym( void*, const char*, void* );
 
+/* TODO thread safety (is that needed in this case?) */
 void* dlsym( void *handle, const char *symbol )
 {
-//	fprintf(stderr,"[gltxdump] program asks for \"%s\" through dlsym\n",
-//		symbol);
+	bail(B_DEBUG,"[gltxdump] program asks for \"%s\" through dlsym\n",
+		symbol);
 	if ( !strcmp(symbol,"glTexImage2D") ) return glTexImage2D;
 	if ( !strcmp(symbol,"glTexSubImage2D") ) return glTexSubImage2D;
 	if ( !strcmp(symbol,"glCompressedTexImage2D") )
@@ -353,14 +401,22 @@ static void gltxdump_exit( void ) __attribute((destructor));
 static void gltxdump_init( void )
 {
 	mkcrc();
-	fprintf(stderr,"[gltxdump] successfully hooked PID %u\n",getpid());
+	bail(B_INFO,"[gltxdump] successfully hooked PID %u\n",getpid());
+	FILE *comm = fopen("/proc/self/comm","r");
+	if ( comm )
+	{
+		fscanf(comm,"%255[^\n]",&pname);
+		fclose(comm);
+	}
+	if ( !*pname )
+		bail(B_WARN,"[gltxdump] could not retrieve program name\n");
 	dlsym_real = _dl_sym(RTLD_NEXT,"dlsym",gltxdump_init);
-	fprintf(stderr,"[gltxdump] real dlsym at %p\n",dlsym_real);
+	bail(B_INFO,"[gltxdump] real dlsym at %p\n",dlsym_real);
 	char *err = 0;
 	handle = dlopen("libGL.so",RTLD_LAZY);
 	if ( !handle )
 	{
-		fprintf(stderr,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
+		bail(B_ERR,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
 		exit(EXIT_FAILURE);
 	}
 	dlerror();
@@ -368,52 +424,52 @@ static void gltxdump_init( void )
 	err = dlerror();
 	if ( err )
 	{
-		fprintf(stderr,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
+		bail(B_ERR,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
 		exit(EXIT_FAILURE);
 	}
-	fprintf(stderr,"[gltxdump] Found glTexImage2D at %p\n",glteximage2d);
+	bail(B_INFO,"[gltxdump] Found glTexImage2D at %p\n",glteximage2d);
 	*(void**)(&gltexsubimage2d) = dlsym_real(handle,"glTexSubImage2D");
 	err = dlerror();
 	if ( err )
 	{
-		fprintf(stderr,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
+		bail(B_ERR,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
 		exit(EXIT_FAILURE);
 	}
-	fprintf(stderr,"[gltxdump] Found glTexSubImage2D at %p\n",
+	bail(B_INFO,"[gltxdump] Found glTexSubImage2D at %p\n",
 		gltexsubimage2d);
 	*(void**)(&glcompressedteximage2d) = dlsym_real(handle,
 		"glCompressedTexImage2D");
 	err = dlerror();
 	if ( err )
 	{
-		fprintf(stderr,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
+		bail(B_ERR,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
 		exit(EXIT_FAILURE);
 	}
-	fprintf(stderr,"[gltxdump] Found glCompressedTexImage2D at %p\n",
+	bail(B_INFO,"[gltxdump] Found glCompressedTexImage2D at %p\n",
 		glcompressedteximage2d);
 	*(void**)(&glcompressedtexsubimage2d) = dlsym_real(handle,
 		"glCompressedTexSubImage2D");
 	err = dlerror();
 	if ( err )
 	{
-		fprintf(stderr,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
+		bail(B_ERR,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
 		exit(EXIT_FAILURE);
 	}
-	fprintf(stderr,"[gltxdump] Found glCompressedTexSubImage2D at %p\n",
+	bail(B_INFO,"[gltxdump] Found glCompressedTexSubImage2D at %p\n",
 		glcompressedtexsubimage2d);
 	*(void**)(&glxgetprocaddress) = dlsym_real(handle,"glXGetProcAddress");
 	err = dlerror();
 	if ( err )
 	{
-		fprintf(stderr,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
+		bail(B_ERR,"[gltxdump] WE DONE FUCKED UP: %s\n",dlerror());
 		exit(EXIT_FAILURE);
 	}
-	fprintf(stderr,"[gltxdump] Found glXGetProcAddress at %p\n",
+	bail(B_INFO,"[gltxdump] Found glXGetProcAddress at %p\n",
 		glxgetprocaddress);
 }
 
 static void gltxdump_exit( void )
 {
-	fprintf(stderr,"[gltxdump] successfully unhooked PID %u\n",getpid());
+	bail(B_INFO,"[gltxdump] successfully unhooked PID %u\n",getpid());
 	dlclose(handle);
 }
