@@ -24,6 +24,8 @@
 char texpath[256] = OVERRIDE_PATH;
 int verbose = 0;
 
+#define GL_UNSIGNED_BYTE 0x1401
+
 #define GL_RED  0x1903
 #define GL_RG   0x8227
 #define GL_RGB  0x1907
@@ -126,7 +128,7 @@ int replacetexture( unsigned target, int level, int internalFormat, int width,
 	mkdir(fname,0755);
 	snprintf(fname,256,"%s/%s/%u_%08X.dds",texpath,pname,level,texcrc);
 	struct stat st;
-	if ( stat(fname,&st) == -1 ) return 0;	/* no replacement */
+	if ( stat(fname,&st) == -1 ) return 0;
 	FILE *tx = fopen(fname,"r");
 	if ( !tx )
 		return bail(B_ERR,"[gltxmod] could not open file for %08X:"
@@ -143,9 +145,59 @@ int replacetexture( unsigned target, int level, int internalFormat, int width,
 	int newsiz = st.st_size-sizeof(ddsheader_t);
 	if ( ddshead.pf_fourcc == 0 )
 	{
-		// TODO
+		void *newdata = malloc(newsiz);
+		fread(newdata,1,newsiz,tx);
+		fclose(tx);
+		if ( (ddshead.pf_bitcount == 8) && (ddshead.pf_rmask == 0xff) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_RED,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 16)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_amask == 0xff00) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_RG,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 24)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff0000) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_RGB,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 24)
+			&& (ddshead.pf_rmask == 0xff0000)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_BGR,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 32)
+			&& (ddshead.pf_rmask == 0xff0000)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff)
+			&& (ddshead.pf_amask == 0xff000000) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_BGRA,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 32)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff0000)
+			&& (ddshead.pf_amask == 0xff000000) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_RGBA,GL_UNSIGNED_BYTE,
+				newdata);
+		else
+		{
+			free(newdata);
+			return bail(B_WARN,
+				"[gltxmod] unsupported DDS texture\n")&0;
+		}
+		free(newdata);
+		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x31545844 )
+	if ( ddshead.pf_fourcc == 0x31545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
@@ -156,7 +208,7 @@ int replacetexture( unsigned target, int level, int internalFormat, int width,
 		free(newdata);
 		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x33545844 )
+	if ( ddshead.pf_fourcc == 0x33545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
@@ -167,7 +219,7 @@ int replacetexture( unsigned target, int level, int internalFormat, int width,
 		free(newdata);
 		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x35545844 )
+	if ( ddshead.pf_fourcc == 0x35545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
@@ -196,7 +248,7 @@ int replacesubtexture( unsigned target, int level, int xoffset, int yoffset,
 	mkdir(fname,0755);
 	snprintf(fname,256,"%s/%s/%u_%08X.dds",texpath,pname,level,texcrc);
 	struct stat st;
-	if ( stat(fname,&st) == -1 ) return 0;	/* no replacement */
+	if ( stat(fname,&st) == -1 ) return 0;
 	FILE *tx = fopen(fname,"r");
 	if ( !tx )
 		return bail(B_ERR,"[gltxmod] could not open file for %08X:"
@@ -213,38 +265,100 @@ int replacesubtexture( unsigned target, int level, int xoffset, int yoffset,
 	int newsiz = st.st_size-sizeof(ddsheader_t);
 	if ( ddshead.pf_fourcc == 0 )
 	{
-		// TODO
-	}
-	else if ( ddshead.pf_fourcc == 0x31545844 )
-	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
 		fclose(tx);
-		glcompressedtexsubimage2d(target,level,xoffset,yoffset,
-			ddshead.width,ddshead.height,
-			GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,newsiz,newdata);
+		if ( (ddshead.pf_bitcount == 8) && (ddshead.pf_rmask == 0xff) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_RED,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 16)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_amask == 0xff00) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_RG,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 24)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff0000) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_RGB,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 24)
+			&& (ddshead.pf_rmask == 0xff0000)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_BGR,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 32)
+			&& (ddshead.pf_rmask == 0xff0000)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff)
+			&& (ddshead.pf_amask == 0xff000000) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_BGRA,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 32)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff0000)
+			&& (ddshead.pf_amask == 0xff000000) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_RGBA,GL_UNSIGNED_BYTE,newdata);
+		else
+		{
+			free(newdata);
+			return bail(B_WARN,
+				"[gltxmod] unsupported DDS texture\n")&0;
+		}
 		free(newdata);
 		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x33545844 )
+	if ( ddshead.pf_fourcc == 0x31545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
 		fclose(tx);
-		glcompressedtexsubimage2d(target,level,xoffset,yoffset,
-			ddshead.width,ddshead.height,
-			GL_COMPRESSED_RGBA_S3TC_DXT3_EXT,newsiz,newdata);
+		glcompressedtexsubimage2d(target,level,xoffset
+			*(ddshead.width/(float)width),yoffset
+			*(ddshead.height/(float)height),ddshead.width,
+			ddshead.height,GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,
+			newsiz,newdata);
 		free(newdata);
 		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x35545844 )
+	if ( ddshead.pf_fourcc == 0x33545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
 		fclose(tx);
-		glcompressedtexsubimage2d(target,level,xoffset,yoffset,
-			ddshead.width,ddshead.height,
-			GL_COMPRESSED_RGBA_S3TC_DXT5_EXT,newsiz,newdata);
+		glcompressedtexsubimage2d(target,level,xoffset
+			*(ddshead.width/(float)width),yoffset
+			*(ddshead.height/(float)height),ddshead.width,
+			ddshead.height,GL_COMPRESSED_RGBA_S3TC_DXT3_EXT,
+			newsiz,newdata);
+		free(newdata);
+		return 1;
+	}
+	if ( ddshead.pf_fourcc == 0x35545844 )
+	{
+		void *newdata = malloc(newsiz);
+		fread(newdata,1,newsiz,tx);
+		fclose(tx);
+		glcompressedtexsubimage2d(target,level,xoffset
+			*(ddshead.width/(float)width),yoffset
+			*(ddshead.height/(float)height),ddshead.width,
+			ddshead.height,GL_COMPRESSED_RGBA_S3TC_DXT5_EXT,
+			newsiz,newdata);
 		free(newdata);
 		return 1;
 	}
@@ -264,7 +378,7 @@ int replacecompressed( unsigned target, int level, unsigned internalFormat,
 	mkdir(fname,0755);
 	snprintf(fname,256,"%s/%s/%u_%08X.dds",texpath,pname,level,texcrc);
 	struct stat st;
-	if ( stat(fname,&st) == -1 ) return 0;	/* no replacement */
+	if ( stat(fname,&st) == -1 ) return 0;
 	FILE *tx = fopen(fname,"r");
 	if ( !tx )
 		return bail(B_ERR,"[gltxmod] could not open file for %08X:"
@@ -282,9 +396,59 @@ int replacecompressed( unsigned target, int level, unsigned internalFormat,
 	int newsiz = st.st_size-sizeof(ddsheader_t);
 	if ( ddshead.pf_fourcc == 0 )
 	{
-		// TODO
+		void *newdata = malloc(newsiz);
+		fread(newdata,1,newsiz,tx);
+		fclose(tx);
+		if ( (ddshead.pf_bitcount == 8) && (ddshead.pf_rmask == 0xff) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_RED,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 16)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_amask == 0xff00) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_RG,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 24)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff0000) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_RGB,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 24)
+			&& (ddshead.pf_rmask == 0xff0000)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_BGR,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 32)
+			&& (ddshead.pf_rmask == 0xff0000)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff)
+			&& (ddshead.pf_amask == 0xff000000) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_BGRA,GL_UNSIGNED_BYTE,
+				newdata);
+		else if ( (ddshead.pf_bitcount == 32)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff0000)
+			&& (ddshead.pf_amask == 0xff000000) )
+			glteximage2d(target,level,internalFormat,ddshead.width,
+				ddshead.height,border,GL_RGBA,GL_UNSIGNED_BYTE,
+				newdata);
+		else
+		{
+			free(newdata);
+			return bail(B_WARN,
+				"[gltxmod] unsupported DDS texture\n")&0;
+		}
+		free(newdata);
+		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x31545844 )
+	if ( ddshead.pf_fourcc == 0x31545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
@@ -295,7 +459,7 @@ int replacecompressed( unsigned target, int level, unsigned internalFormat,
 		free(newdata);
 		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x33545844 )
+	if ( ddshead.pf_fourcc == 0x33545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
@@ -306,7 +470,7 @@ int replacecompressed( unsigned target, int level, unsigned internalFormat,
 		free(newdata);
 		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x35545844 )
+	if ( ddshead.pf_fourcc == 0x35545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
@@ -334,7 +498,7 @@ int replacesubcompressed( unsigned target, int level, int xoffset, int yoffset,
 	mkdir(fname,0755);
 	snprintf(fname,256,"%s/%s/%u_%08X.dds",texpath,pname,level,texcrc);
 	struct stat st;
-	if ( stat(fname,&st) == -1 ) return 0;	/* no replacement */
+	if ( stat(fname,&st) == -1 ) return 0;
 	FILE *tx = fopen(fname,"r");
 	if ( !tx )
 		return bail(B_ERR,"[gltxmod] could not open file for %08X:"
@@ -352,38 +516,100 @@ int replacesubcompressed( unsigned target, int level, int xoffset, int yoffset,
 	int newsiz = st.st_size-sizeof(ddsheader_t);
 	if ( ddshead.pf_fourcc == 0 )
 	{
-		// TODO
-	}
-	else if ( ddshead.pf_fourcc == 0x31545844 )
-	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
 		fclose(tx);
-		glcompressedtexsubimage2d(target,level,xoffset,yoffset,
-			ddshead.width,ddshead.height,
-			GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,newsiz,newdata);
+		if ( (ddshead.pf_bitcount == 8) && (ddshead.pf_rmask == 0xff) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_RED,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 16)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_amask == 0xff00) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_RG,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 24)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff0000) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_RGB,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 24)
+			&& (ddshead.pf_rmask == 0xff0000)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_BGR,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 32)
+			&& (ddshead.pf_rmask == 0xff0000)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff)
+			&& (ddshead.pf_amask == 0xff000000) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_BGRA,GL_UNSIGNED_BYTE,newdata);
+		else if ( (ddshead.pf_bitcount == 32)
+			&& (ddshead.pf_rmask == 0xff)
+			&& (ddshead.pf_gmask == 0xff00)
+			&& (ddshead.pf_bmask == 0xff0000)
+			&& (ddshead.pf_amask == 0xff000000) )
+			gltexsubimage2d(target,level,xoffset*(ddshead.width
+				/(float)width),yoffset*(ddshead.height
+				/(float)height),ddshead.width,ddshead.height,
+				GL_RGBA,GL_UNSIGNED_BYTE,newdata);
+		else
+		{
+			free(newdata);
+			return bail(B_WARN,
+				"[gltxmod] unsupported DDS texture\n")&0;
+		}
 		free(newdata);
 		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x33545844 )
+	if ( ddshead.pf_fourcc == 0x31545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
 		fclose(tx);
-		glcompressedtexsubimage2d(target,level,xoffset,yoffset,
-			ddshead.width,ddshead.height,
-			GL_COMPRESSED_RGBA_S3TC_DXT3_EXT,newsiz,newdata);
+		glcompressedtexsubimage2d(target,level,xoffset
+			*(ddshead.width/(float)width),yoffset
+			*(ddshead.height/(float)height),ddshead.width,
+			ddshead.height,GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,
+			newsiz,newdata);
 		free(newdata);
 		return 1;
 	}
-	else if ( ddshead.pf_fourcc == 0x35545844 )
+	if ( ddshead.pf_fourcc == 0x33545844 )
 	{
 		void *newdata = malloc(newsiz);
 		fread(newdata,1,newsiz,tx);
 		fclose(tx);
-		glcompressedtexsubimage2d(target,level,xoffset,yoffset,
-			ddshead.width,ddshead.height,
-			GL_COMPRESSED_RGBA_S3TC_DXT5_EXT,newsiz,newdata);
+		glcompressedtexsubimage2d(target,level,xoffset
+			*(ddshead.width/(float)width),yoffset
+			*(ddshead.height/(float)height),ddshead.width,
+			ddshead.height,GL_COMPRESSED_RGBA_S3TC_DXT3_EXT,
+			newsiz,newdata);
+		free(newdata);
+		return 1;
+	}
+	if ( ddshead.pf_fourcc == 0x35545844 )
+	{
+		void *newdata = malloc(newsiz);
+		fread(newdata,1,newsiz,tx);
+		fclose(tx);
+		glcompressedtexsubimage2d(target,level,xoffset
+			*(ddshead.width/(float)width),yoffset
+			*(ddshead.height/(float)height),ddshead.width,
+			ddshead.height,GL_COMPRESSED_RGBA_S3TC_DXT5_EXT,
+			newsiz,newdata);
 		free(newdata);
 		return 1;
 	}
