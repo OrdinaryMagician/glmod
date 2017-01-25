@@ -717,7 +717,6 @@ void* glXGetProcAddressARB( const char* proc )
 
 extern void *_dl_sym( void*, const char*, void* );
 
-/* TODO thread safety (is that needed in this case?) */
 void* dlsym( void *handle, const char *symbol )
 {
 	bail(B_DEBUG,"[gltxmod] program asks for \"%s\" through dlsym\n",
