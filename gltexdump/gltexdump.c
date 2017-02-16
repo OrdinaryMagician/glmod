@@ -63,7 +63,7 @@ static void(*glteximage2d)(unsigned,int,int,int,int,int,unsigned,unsigned,
 	const void*) = 0;
 static void(*gltexsubimage2d)(unsigned,int,int,int,int,int,unsigned,
 	unsigned,const void*) = 0;
-static void(*(*glxgetprocaddress)(const unsigned char *procname))(void) = 0;
+static void(*(*glxgetprocaddress)(const char *))(void) = 0;
 static void *(*dlsym_real)(void*,const char*) = 0;
 static void(*glcompressedteximage2d)(unsigned,int,unsigned,int,int,int,int,
 	const void*) = 0;
@@ -75,7 +75,7 @@ static void(*glcompressedtexsubimage2d)(unsigned,int,int,int,int,int,unsigned,
 #define B_WARN  1
 #define B_INFO  2
 #define B_DEBUG 3
-int bail( int level, const char *fmt, ... )
+static int bail( int level, const char *fmt, ... )
 {
 	if ( level > verbose ) return 1;
 	va_list args;
@@ -85,7 +85,7 @@ int bail( int level, const char *fmt, ... )
 	return 1;
 }
 
-int getpixelsize( unsigned format )
+static int getpixelsize( unsigned format )
 {
 	if ( format == GL_RED ) return 1;
 	if ( format == GL_RG ) return 2;
@@ -96,9 +96,9 @@ int getpixelsize( unsigned format )
 	return bail(B_WARN,"[gltxdump] unsupported format %x\n",format)&0;
 }
 
-dword crc_tab[256];
+static dword crc_tab[256];
 
-void mkcrc( void )
+static void mkcrc( void )
 {
 	dword c;
 	int n, k;
@@ -110,7 +110,7 @@ void mkcrc( void )
 	}
 }
 
-dword upcrc( dword crc, const byte *buf, int len)
+static dword upcrc( dword crc, const byte *buf, int len)
 {
 	dword c = crc;
 	int n;
@@ -118,12 +118,12 @@ dword upcrc( dword crc, const byte *buf, int len)
 	return c;
 }
 
-dword crc( const byte *buf, int len )
+static dword crc( const byte *buf, int len )
 {
 	return upcrc(0xFFFFFFFFUL,buf,len)^0xFFFFFFFFUL;
 }
 
-void dumptexture( unsigned format, int mip, int width, int height,
+static void dumptexture( unsigned format, int mip, int width, int height,
 	const void* pixels )
 {
 	if ( (mip > 0) && !dumpallmiplevels )
@@ -221,7 +221,7 @@ void dumptexture( unsigned format, int mip, int width, int height,
 	fclose(tx);
 }
 
-void dumpcompressed( unsigned format, int mip, int width, int height,
+static void dumpcompressed( unsigned format, int mip, int width, int height,
 	int datasize, const void* data )
 {
 	if ( !dumpcomptex )
@@ -309,7 +309,7 @@ void glTexSubImage2D( unsigned target, int level, int xoffset, int yoffset,
 
 void glCompressedTexImage2D( unsigned target, int level,
 	unsigned internalformat, int width, int height, int border,
-	int imageSize, const void *data)
+	int imageSize, const void *data )
 {
 	bail(B_DEBUG,"[gltxdump] glCompressedTexImage2D(%u,%d,%u,%d,%d,%d,%d"
 		",%p)\n",target,level,internalformat,width,height,border,
@@ -321,7 +321,7 @@ void glCompressedTexImage2D( unsigned target, int level,
 
 void glCompressedTexSubImage2D( unsigned target, int level,
 	int xoffset, int yoffset, int width, int height, unsigned format,
-	int imageSize, const void *data)
+	int imageSize, const void *data )
 {
 	bail(B_DEBUG,"[gltxdump] glCompressedTexSubImage2D(%u,%d,%d,%d,%d,%d"
 		",%u,%d,%p)\n",target,level,xoffset,yoffset,width,height,

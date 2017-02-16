@@ -1,34 +1,49 @@
 /*
 	notsanae.c : le sanae face, now with generic png image support.
-	The beginning of what could possibly be the first general purpose
-	texture replacement modding library for Linux.
-	(C)2016 Marisa Kirisame, UnSX Team.
+	Now with generic OpenAL sound replacement support, too!
+	And also compressed texture loading overrides!
+	And dlsym overrides! Now everything can be Tim Allen, 100% guaranteed.
+	(C)2016-2017 Marisa Kirisame, UnSX Team.
 	Released under the GNU GPLv3 (or later).
 */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <dlfcn.h>
-#include <string.h>
 #include <unistd.h>
+#include <string.h>
 #include <png.h>	/* of course it requires libpng */
+#include <sndfile.h>	/* for loading audio files (in wav) */
 
 #define GL_UNSIGNED_BYTE   0x1401
 
 #define GL_RGB             0x1907
 #define GL_RGBA            0x1908
 
-static void *handle = 0;
+#define AL_FORMAT_MONO16   0x1101
+#define AL_FORMAT_STEREO16 0x1103
+
+static void *glhandle = 0, *alhandle = 0;
 static void(*glteximage2d)(unsigned,int,int,int,int,int,unsigned,unsigned,
 	const void*) = 0;
 static void(*gltexsubimage2d)(unsigned,int,int,int,int,int,unsigned,
 	unsigned,const void*) = 0;
-static void(*(*glxgetprocaddress)(const unsigned char *procname))(void) = 0;
+static void(*(*glxgetprocaddress)(const char *))(void) = 0;
+static void *(*dlsym_real)(void*,const char*) = 0;
+static void(*glcompressedteximage2d)(unsigned,int,unsigned,int,int,int,int,
+	const void*) = 0;
+static void(*glcompressedtexsubimage2d)(unsigned,int,int,int,int,int,unsigned,
+	int,const void*) = 0;
+static void(*albufferdata)(unsigned,int,const void*,int,int) = 0;
+static void(*(*algetprocaddress)(const char*))(void) = 0;
 
-unsigned char *sannie = 0;
-int sanniew = 0, sannieh = 0;
-int sanniealpha = 0;
+static unsigned char *sannie = 0;
+static int sanniew = 0, sannieh = 0, sanniealpha = 0;
 
-static int loadsanae( unsigned char *filename )
+static short *sound = 0;
+static int soundf = 0, soundr = 0, soundc = 0;
+
+static int loadsanae( char *filename )
 {
 	png_structp pngp;
 	png_infop infp;
@@ -72,6 +87,42 @@ static int loadsanae( unsigned char *filename )
 	png_destroy_read_struct(&pngp,&infp,0);
 	fclose(pf);
 	return 1;
+}
+
+/* libsndfile sure requires less boilerplate */
+static int loadsound( char *filename )
+{
+	SNDFILE *sf;
+	SF_INFO inf;
+	if ( !(sf = sf_open(filename,SFM_READ,&inf)) ) return 0;
+	soundf = inf.frames;
+	soundr = inf.samplerate;
+	soundc = inf.channels;
+	sound = malloc(soundf*soundc*2); /* always 16-bit audio */
+	sf_read_short(sf,sound,soundf*soundc);
+	sf_close(sf);
+	return 1;
+}
+
+void alBufferData( unsigned int buffer, int format, const void *data,
+	int size, int freq )
+{
+	fprintf(stderr,"[notsanae] alBufferData(%d,%x,%p,%d,%d)\n",buffer,
+		format,data,size,freq);
+	/* skip some formats to avoid a buffer allocation failure */
+	if ( (format < 0x1100) || (format > 0x1103) )
+	{
+		fprintf(stderr,"[notsanae] format %x not supported\n",format);
+		albufferdata(buffer,format,data,size,freq);
+		return;
+	}
+	else if ( !sound )
+	{
+		albufferdata(buffer,format,data,size,freq);
+		return;
+	}
+	albufferdata(buffer,(soundc==2)?AL_FORMAT_STEREO16:AL_FORMAT_MONO16,
+		sound,soundf*soundc*2,soundr);
 }
 
 void glTexImage2D( unsigned target, int level, int internalFormat,
@@ -124,11 +175,49 @@ void glTexSubImage2D( unsigned target, int level, int xoffset, int yoffset,
 		sanniealpha?GL_RGBA:GL_RGB,GL_UNSIGNED_BYTE,sannie);
 }
 
+void glCompressedTexImage2D( unsigned target, int level,
+	unsigned internalformat, int width, int height, int border,
+	int imageSize, const void *data )
+{
+	fprintf(stderr,"[notsanae] glCompressedTexImage2D(%u,%d,%x,%d,%d,%d,%d"
+		",%p)\n",target,level,internalformat,width,height,border,
+		imageSize,data);
+	if ( !sannie )
+	{
+		glcompressedteximage2d(target,level,internalformat,width,
+			height,border,imageSize,data);
+		return;
+	}
+	glteximage2d(target,level,internalformat,sanniew,sannieh,border,
+		sanniealpha?GL_RGBA:GL_RGB,GL_UNSIGNED_BYTE,sannie);
+}
+
+void glCompressedTexSubImage2D( unsigned target, int level,
+	int xoffset, int yoffset, int width, int height, unsigned format,
+	int imageSize, const void *data )
+{
+	fprintf(stderr,"[notsanae] glCompressedTexSubImage2D(%u,%d,%d,%d,%d,%d"
+		",%x,%d,%p)\n",target,level,xoffset,yoffset,width,height,
+		format,imageSize,data);
+	if ( !sannie )
+	{
+		glcompressedtexsubimage2d(target,level,xoffset,yoffset,width,
+			height,format,imageSize,data);
+		return;
+	}
+	gltexsubimage2d(target,level,xoffset,yoffset,sanniew,sannieh,
+		sanniealpha?GL_RGBA:GL_RGB,GL_UNSIGNED_BYTE,sannie);
+}
+
 void* SDL_GL_GetProcAddress( const char* proc )
 {
 	fprintf(stderr,"[notsanae] program asks for \"%s\"\n",proc);
 	if ( !strcmp(proc,"glTexImage2D") ) return glTexImage2D;
 	if ( !strcmp(proc,"glTexSubImage2D") ) return glTexSubImage2D;
+	if ( !strcmp(proc,"glCompressedTexImage2D") )
+		return glCompressedTexImage2D;
+	if ( !strcmp(proc,"glCompressedTexSubImage2D") )
+		return glCompressedTexSubImage2D;
 	return glxgetprocaddress(proc);
 }
 
@@ -137,6 +226,10 @@ void* glXGetProcAddress( const char* proc )
 	fprintf(stderr,"[notsanae] program asks for \"%s\"\n",proc);
 	if ( !strcmp(proc,"glTexImage2D") ) return glTexImage2D;
 	if ( !strcmp(proc,"glTexSubImage2D") ) return glTexSubImage2D;
+	if ( !strcmp(proc,"glCompressedTexImage2D") )
+		return glCompressedTexImage2D;
+	if ( !strcmp(proc,"glCompressedTexSubImage2D") )
+		return glCompressedTexSubImage2D;
 	return glxgetprocaddress(proc);
 }
 
@@ -145,7 +238,43 @@ void* glXGetProcAddressARB( const char* proc )
 	fprintf(stderr,"[notsanae] program asks for \"%s\"\n",proc);
 	if ( !strcmp(proc,"glTexImage2D") ) return glTexImage2D;
 	if ( !strcmp(proc,"glTexSubImage2D") ) return glTexSubImage2D;
+	if ( !strcmp(proc,"glCompressedTexImage2D") )
+		return glCompressedTexImage2D;
+	if ( !strcmp(proc,"glCompressedTexSubImage2D") )
+		return glCompressedTexSubImage2D;
 	return glxgetprocaddress(proc);
+}
+
+void* alGetProcAddress( const char* proc )
+{
+	fprintf(stderr,"[notsanae] program asks for \"%s\"\n",proc);
+	if ( !strcmp(proc,"alBufferData") ) return alBufferData;
+	return algetprocaddress(proc);
+}
+
+extern void *_dl_sym( void*, const char*, void* );
+
+void* dlsym( void *handle, const char *symbol )
+{
+	fprintf(stderr,"[notsanae] program asks for \"%s\" through dlsym\n",
+		symbol);
+	if ( !strcmp(symbol,"glTexImage2D") ) return glTexImage2D;
+	if ( !strcmp(symbol,"glTexSubImage2D") ) return glTexSubImage2D;
+	if ( !strcmp(symbol,"glCompressedTexImage2D") )
+		return glCompressedTexImage2D;
+	if ( !strcmp(symbol,"glCompressedTexSubImage2D") )
+		return glCompressedTexSubImage2D;
+	if ( !strcmp(symbol,"SDL_GL_GetProcAddress") )
+		return SDL_GL_GetProcAddress;
+	if ( !strcmp(symbol,"glXGetProcAddress") ) return glXGetProcAddress;
+	if ( !strcmp(symbol,"glXGetProcAddressARB") )
+		return glXGetProcAddressARB;
+	if ( !strcmp(symbol,"alBufferData") )
+		return alBufferData;
+	if ( !strcmp(symbol,"alGetProcAddress") )
+		return alGetProcAddress;
+	if ( !strcmp(symbol,"dlsym") ) return dlsym;
+	return dlsym_real(handle,symbol);
 }
 
 static void notsanae_init( void ) __attribute((constructor));
@@ -153,16 +282,17 @@ static void notsanae_exit( void ) __attribute((destructor));
 
 static void notsanae_init( void )
 {
+	dlsym_real = _dl_sym(RTLD_NEXT,"dlsym",notsanae_init);
 	fprintf(stderr,"[notsanae] successfully hooked PID %u\n",getpid());
 	char *err = 0;
-	handle = dlopen("libGL.so",RTLD_LAZY);
-	if ( !handle )
+	glhandle = dlopen("libGL.so",RTLD_LAZY);
+	if ( !glhandle )
 	{
 		fprintf(stderr,"[notsanae] WE DONE FUCKED UP: %s\n",dlerror());
 		exit(EXIT_FAILURE);
 	}
 	dlerror();
-	*(void**)(&glteximage2d) = dlsym(handle,"glTexImage2D");
+	*(void**)(&glteximage2d) = dlsym_real(glhandle,"glTexImage2D");
 	err = dlerror();
 	if ( err )
 	{
@@ -170,7 +300,7 @@ static void notsanae_init( void )
 		exit(EXIT_FAILURE);
 	}
 	fprintf(stderr,"[notsanae] Found glTexImage2D at %p\n",glteximage2d);
-	*(void**)(&gltexsubimage2d) = dlsym(handle,"glTexSubImage2D");
+	*(void**)(&gltexsubimage2d) = dlsym_real(glhandle,"glTexSubImage2D");
 	err = dlerror();
 	if ( err )
 	{
@@ -179,7 +309,28 @@ static void notsanae_init( void )
 	}
 	fprintf(stderr,"[notsanae] Found glTexSubImage2D at %p\n",
 		gltexsubimage2d);
-	*(void**)(&glxgetprocaddress) = dlsym(handle,"glXGetProcAddress");
+	*(void**)(&glcompressedteximage2d) = dlsym_real(glhandle,
+		"glCompressedTexImage2D");
+	err = dlerror();
+	if ( err )
+	{
+		fprintf(stderr,"[notsanae] WE DONE FUCKED UP: %s\n",dlerror());
+		exit(EXIT_FAILURE);
+	}
+	fprintf(stderr,"[notsanae] Found glCompressedTexImage2D at %p\n",
+		glcompressedteximage2d);
+	*(void**)(&glcompressedtexsubimage2d) = dlsym_real(glhandle,
+		"glCompressedTexSubImage2D");
+	err = dlerror();
+	if ( err )
+	{
+		fprintf(stderr,"[notsanae] WE DONE FUCKED UP: %s\n",dlerror());
+		exit(EXIT_FAILURE);
+	}
+	fprintf(stderr,"[notsanae] Found glCompressedTexSubImage2D at %p\n",
+		glcompressedtexsubimage2d);
+	*(void**)(&glxgetprocaddress) = dlsym_real(glhandle,
+		"glXGetProcAddress");
 	err = dlerror();
 	if ( err )
 	{
@@ -188,13 +339,41 @@ static void notsanae_init( void )
 	}
 	fprintf(stderr,"[notsanae] Found glXGetProcAddress at %p\n",
 		glxgetprocaddress);
-	if ( !loadsanae(getenv("SANNIE")) )
-		fprintf(stderr,"[notsanae] No image! Library useless!\n");
+	alhandle = dlopen("libopenal.so",RTLD_LAZY);
+	if ( !alhandle )
+	{
+		fprintf(stderr,"[notsanae] WE DONE FUCKED UP: %s\n",dlerror());
+		exit(EXIT_FAILURE);
+	}
+	dlerror();
+	*(void**)(&albufferdata) = dlsym_real(alhandle,"alBufferData");
+	err = dlerror();
+	if ( err )
+	{
+		fprintf(stderr,"[notsanae] WE DONE FUCKED UP: %s\n",dlerror());
+		exit(EXIT_FAILURE);
+	}
+	fprintf(stderr,"[notsanae] Found alBufferData at %p\n",albufferdata);
+	*(void**)(&algetprocaddress) = dlsym_real(alhandle,"alGetProcAddress");
+	err = dlerror();
+	if ( err )
+	{
+		fprintf(stderr,"[notsanae] WE DONE FUCKED UP: %s\n",dlerror());
+		exit(EXIT_FAILURE);
+	}
+	fprintf(stderr,"[notsanae] Found alGetProcAddress at %p\n",
+		algetprocaddress);
+	if ( !loadsanae(getenv("SANNIE_IMAGE")) )
+		fprintf(stderr,"[notsanae] No image!\n");
+	if ( !loadsound(getenv("SANNIE_SOUND")) )
+		fprintf(stderr,"[notsanae] No sound!\n");
 }
 
 static void notsanae_exit( void )
 {
+	if ( sound ) free(sound);
 	if ( sannie ) free(sannie);
-	dlclose(handle);
+	dlclose(alhandle);
+	dlclose(glhandle);
 	fprintf(stderr,"[notsanae] successfully unhooked PID %u\n",getpid());
 }
