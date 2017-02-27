@@ -3,6 +3,7 @@
 	Now with generic OpenAL sound replacement support, too!
 	And also compressed texture loading overrides!
 	And dlsym overrides! Now everything can be Tim Allen, 100% guaranteed.
+	Note that games with texture atlas will not quite look as expected.
 	(C)2016-2017 Marisa Kirisame, UnSX Team.
 	Released under the GNU GPLv3 (or later).
 */
@@ -109,7 +110,10 @@ void alBufferData( unsigned int buffer, int format, const void *data,
 {
 	fprintf(stderr,"[notsanae] alBufferData(%d,%x,%p,%d,%d)\n",buffer,
 		format,data,size,freq);
-	/* skip some formats to avoid a buffer allocation failure */
+	/*
+	   skip some formats to avoid a buffer allocation failure
+	   notable cases include games that use MS ADPCM audio
+	*/
 	if ( (format < 0x1100) || (format > 0x1103) )
 	{
 		fprintf(stderr,"[notsanae] format %x not supported\n",format);
@@ -363,10 +367,11 @@ static void notsanae_init( void )
 	}
 	fprintf(stderr,"[notsanae] Found alGetProcAddress at %p\n",
 		algetprocaddress);
-	if ( !loadsanae(getenv("SANNIE_IMAGE")) )
-		fprintf(stderr,"[notsanae] No image!\n");
-	if ( !loadsound(getenv("SANNIE_SOUND")) )
-		fprintf(stderr,"[notsanae] No sound!\n");
+	/* if no variables, fall back to generic files in working directory */
+	if ( !loadsanae(getenv("SANNIE_IMAGE")) ) loadsanae("sannie.png");
+	if ( !loadsound(getenv("SANNIE_SOUND")) ) loadsound("sannie.wav");
+	if ( !sannie && !sound )
+		fprintf(stderr,"[notsanae] nothing loaded, library useless\n");
 }
 
 static void notsanae_exit( void )

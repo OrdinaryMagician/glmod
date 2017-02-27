@@ -1,0 +1,55 @@
+Foreword: Users of Arch, Gentoo, Slackware, and other "hardcore" distros, you
+most likely don't need a guide for this, but for the rest, well, here it is.
+
+OK, I know not everyone is an expert Linux user around here, especially all the
+people that have seen my videos, so I may have to babysit you through the whole
+process. I'll just assume that at least you're willing to learn.
+
+First of all, familiarize yourself with using the terminal. In the Linux world,
+The terminal is your best friend. The command line is the quickest, most
+flexible way to do everything, so forget about GUIs. Once you know how to do
+work on it, you can continue with this guide.
+
+Some of these things will be dependent on the Linux distro you're using. Each
+family has its own way of installing packages and such. Refer to any
+documentation the distro has on its package manager, if you don't know this
+already.
+
+Let's begin with the basics. To build the replacer library, you'll need a
+compiler. Get yourself gcc from the package manager. You'll also need
+libopenal, libsndfile, and of course libgl. Those should probably be already
+installed in most cases, especially if you've already set up gzdoom before
+this. Anyway, I'm not going to walk you through those. If you'd rather use
+clang instead of gcc, you probably don't need this guide.
+
+Follow the instructions in the BUILDING file to compile the library, usually
+it'll be for 64-bit. You'll end up with the .so file, put it wherever you want.
+
+Now, about loading the image and sound. First, the image must be in PNG format,
+8 bits per channel, either RGB or RGBA, then the sound has to be in standard
+wav, any sample rate is accepted, can be any number of bits too, and either
+mono or stereo. There are two ways to have them get loaded, the safe one and
+the fast one. You can either set two environment variables for the full paths
+to the files (SANNIE_IMAGE, SANNIE_SOUND), or just shove them in the folder
+you're launching everything from and name them sannie.png and sound.wav,
+respectively.
+
+To launch whatever game you'll be screwing up, just open a terminal and put
+
+LD_PRELOAD="<path to the notsanae.so file>" <name of the program> <program's parameters>
+
+if you're using the fast method, with the files in the folder the terminal is
+at, or
+
+SANNIE_IMAGE="<path to png>" SANNIE_SOUND="<path to wav>" LD_PRELOAD="<path to the notsanae.so file>" <name of the program> <program's parameters>
+
+for the safe method.
+
+As an example, here's how I had to do it for the brutal doom gameplay video:
+
+SANNIE_IMAGE=/tmp/timallen.png SANNIE_SOUND=/tmp/grunt.wav LD_PRELOAD=/tmp/notsanae64.so gzdoom -iwad doom.wad -file /media/Data/Games/ClassicDoom/Mods/brutalv20b.pk3
+
+Yup, it's a pretty long oneliner.
+
+If you need to know how to set up GZDoom, the ZDoom wiki has a guide on how to
+compile it on Linux, good luck.
