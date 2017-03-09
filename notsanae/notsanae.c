@@ -46,6 +46,7 @@ static int soundf = 0, soundr = 0, soundc = 0;
 
 static int loadsanae( char *filename )
 {
+	if ( !filename ) return 0;
 	png_structp pngp;
 	png_infop infp;
 	unsigned int sread = 0;
@@ -93,6 +94,7 @@ static int loadsanae( char *filename )
 /* libsndfile sure requires less boilerplate */
 static int loadsound( char *filename )
 {
+	if ( !filename ) return 0;
 	SNDFILE *sf;
 	SF_INFO inf;
 	if ( !(sf = sf_open(filename,SFM_READ,&inf)) ) return 0;
